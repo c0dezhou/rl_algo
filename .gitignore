@@ -1,0 +1,31 @@
+# Python 缓存
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Pytest 缓存
+.pytest_cache/
+
+# 实验输出
+runs/
+videos/
+models/
+
+# 构建产物
+*.egg-info/
+dist/
+build/
+
+# 临时文件
+diff.txt
+
+# 日志文件
+*.log
+
+# 虚拟环境
+venv/
+.env/
+
+# 编辑器配置
+.vscode/
+.idea/

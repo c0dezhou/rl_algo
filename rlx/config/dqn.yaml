@@ -1,0 +1,13 @@
+# rlx/config/dqn.yaml
+# Default configuration for the DQN agent on Classic Control tasks such as CartPole.
+gamma: 0.99
+lr: 0.001
+buffer_size: 100000
+batch_size: 64
+train_frequency: 4
+target_update_frequency: 1000
+epsilon_start: 1.0
+epsilon_end: 0.05
+epsilon_decay_steps: 50000
+total_steps: 200000
+max_grad_norm: 10.0

@@ -1,0 +1,5 @@
+# rlx/config/mc.yaml
+# Default configuration for the Monte Carlo agent
+gamma: 0.99
+epsilon: 1.0
+total_steps: 50000

@@ -1,0 +1,21 @@
+# Core dependencies
+torch
+gymnasium
+gymnasium[atari,other]
+Box2D>=2.3.10           # 维护中的 pybox2d,替代 box2d-py
+mujoco>=3.0.0           # 官方 mujoco python 绑定
+numpy
+pydantic
+pyyaml
+tqdm
+loguru
+tensorboard
+wandb
+
+# Development and linting
+ruff
+mypy
+black
+isort
+pytest
+pre-commit

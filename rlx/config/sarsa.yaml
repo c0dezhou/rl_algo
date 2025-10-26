@@ -1,0 +1,6 @@
+# rlx/config/sarsa.yaml
+# Default configuration for the SARSA agent
+lr: 0.1
+gamma: 0.99
+epsilon: 1.0
+total_steps: 50000
