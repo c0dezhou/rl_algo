@@ -17,7 +17,7 @@
 import gymnasium as gym
 import numpy as np
 import torch
-from rlx.core.types import Batch
+from rl_algo.core.types import Batch
 
 class ReplayBuffer:
     """

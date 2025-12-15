@@ -20,7 +20,7 @@ from pathlib import Path
 import numpy as np
 import torch
 
-import rlx.algos
+import rl_algo.algos
 
 def set_seed(seed: int):
     """
@@ -84,7 +84,7 @@ def dynamic_import_agents():
     这使得添加一个新算法只需要在 `algos` 目录下创建一个新文件夹并实现相应文件即可。
     """
     # 获取 `rlx.algos` 包的物理路径
-    algos_path = Path(rlx.algos.__file__).parent
+    algos_path = Path(rl_algo.algos.__file__).parent
 
     # 遍历 `rlx.algos` 目录下的所有模块
     for _, name, _ in pkgutil.iter_modules([str(algos_path)]):

@@ -8,9 +8,9 @@ import gymnasium as gym
 import numpy as np
 import torch
 
-from rlx.core.base_agent import BaseAgent
-from rlx.core.registry import registry
-from rlx.core.types import Config, Transition
+from rl_algo.core.base_agent import BaseAgent
+from rl_algo.core.registry import registry
+from rl_algo.core.types import Config, Transition
 
 
 class QLearningConfig(Config):

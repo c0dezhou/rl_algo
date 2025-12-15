@@ -2,8 +2,8 @@ import gymnasium as gym
 import torch
 import pytest
 
-from rlx.core.registry import registry
-from rlx.core.utils import dynamic_import_agents
+from rl_algo.core.registry import registry
+from rl_algo.core.utils import dynamic_import_agents
 
 # 在所有测试运行前执行一次动态导入的夹具
 @pytest.fixture(scope="session", autouse=True)

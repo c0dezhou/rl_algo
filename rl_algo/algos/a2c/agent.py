@@ -9,9 +9,9 @@ from torch import nn
 from torch.distributions import Categorical
 from torch.nn import functional as F
 
-from rlx.core.base_agent import BaseAgent
-from rlx.core.registry import registry
-from rlx.core.types import Batch, Config
+from rl_algo.core.base_agent import BaseAgent
+from rl_algo.core.registry import registry
+from rl_algo.core.types import Batch, Config
 
 
 class A2CConfig(Config):

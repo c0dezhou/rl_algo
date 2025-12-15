@@ -28,7 +28,7 @@ import gymnasium as gym
 import torch
 from pydantic import BaseModel
 
-from rlx.core.base_agent import BaseAgent
+from rl_algo.core.base_agent import BaseAgent
 
 class Registry:
     """

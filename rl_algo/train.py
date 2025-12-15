@@ -44,11 +44,11 @@ import yaml
 from pydantic import BaseModel
 from torch.utils.tensorboard import SummaryWriter
 
-from rlx.core.buffers import ReplayBuffer
-from rlx.core.registry import registry
-from rlx.core.utils import set_seed, dynamic_import_agents
-from rlx.core.types import Batch, Transition
-from rlx.envs.make_env import make_env
+from rl_algo.core.buffers import ReplayBuffer
+from rl_algo.core.registry import registry
+from rl_algo.core.utils import set_seed, dynamic_import_agents
+from rl_algo.core.types import Batch, Transition
+from rl_algo.envs.make_env import make_env
 
 # 动态导入所有在 `rlx/algos` 目录下的算法, 这一步是实现算法自动注册的关键。
 # 执行后, `registry` 对象中将包含所有已发现的算法及其配置。

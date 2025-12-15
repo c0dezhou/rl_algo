@@ -11,7 +11,7 @@ from typing import Any, Dict, Tuple
 
 import gymnasium as gym
 import torch
-from rlx.core.types import Batch, Transition, Config
+from rl_algo.core.types import Batch, Transition, Config
 
 class BaseAgent(abc.ABC):
     """

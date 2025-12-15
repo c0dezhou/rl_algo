@@ -14,10 +14,10 @@ import torch
 from torch import nn
 from torch.nn import functional as F
 
-from rlx.core.base_agent import BaseAgent
-from rlx.core.registry import registry
-from rlx.core.types import Batch, Config
-from rlx.core.utils import get_schedule_fn
+from rl_algo.core.base_agent import BaseAgent
+from rl_algo.core.registry import registry
+from rl_algo.core.types import Batch, Config
+from rl_algo.core.utils import get_schedule_fn
 
 
 class QNetwork(nn.Module):
