@@ -1,4 +1,4 @@
-# rlx/core/registry.py
+# rlx/core/registry.py 模块
 """
 该模块实现了强化学习 (RL) 算法的注册表 (Registry) 和工厂 (Factory) 模式。
 

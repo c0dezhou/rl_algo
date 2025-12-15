@@ -1,4 +1,4 @@
-# rlx/core/base_agent.py
+# rlx/core/base_agent.py 模块
 
 """
 定义了所有强化学习智能体 (Agent) 的抽象基类 (Abstract Base Class, ABC)。

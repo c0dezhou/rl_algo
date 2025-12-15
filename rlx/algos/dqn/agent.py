@@ -1,10 +1,9 @@
-# rlx/algos/dqn/agent.py
+# rlx/algos/dqn/agent.py 模块
 """
-Deep Q-Network (DQN) agent implementation.
+深度Q网络 DQN 智能体实现。
 
-This agent relies on an experience replay buffer (handled by the training loop)
-and maintains a target network for stabilising Q-value updates. Epsilon-greedy
-exploration is controlled via a linear schedule.
+该智能体依赖经验回放缓冲区（由训练循环处理），
+并维护一个目标网络以稳定Q值更新。ε-贪婪探索通过线性调度进行控制。
 """
 
 from typing import Any, Dict, Optional, Tuple
@@ -22,7 +21,7 @@ from rlx.core.utils import get_schedule_fn
 
 
 class QNetwork(nn.Module):
-    """Simple MLP used by both policy and target networks."""
+    """简单多层感知机 for 策略网络 和 目标网络."""
 
     def __init__(self, input_dim: int, output_dim: int):
         super().__init__()
@@ -40,7 +39,7 @@ class QNetwork(nn.Module):
 
 
 class DQNConfig(Config):
-    """Configuration schema for the DQN agent."""
+    """DQN的超参数配置"""
 
     gamma: float = 0.99
     lr: float = 1e-3
@@ -57,7 +56,7 @@ class DQNConfig(Config):
 
 @registry.register_agent("dqn", DQNConfig)
 class DQNAgent(BaseAgent):
-    """Classic DQN agent with target network and epsilon schedule."""
+    """定义 DQN agent 目标网络 和epsilon参数."""
 
     def __init__(
         self,
@@ -69,12 +68,24 @@ class DQNAgent(BaseAgent):
         super().__init__(obs_space, act_space, config, device)
 
         if not isinstance(act_space, gym.spaces.Discrete):
-            raise ValueError("DQN agent currently supports discrete action spaces only.")
+            raise ValueError("DQN 只支持离散动作空间.")
 
         if isinstance(obs_space, gym.spaces.Box):
             self.obs_dim = int(np.prod(obs_space.shape))
         else:
-            raise ValueError("DQN agent expects a Box observation space.")
+            raise ValueError("DQN agent 期待连续的观测空间.")
+        
+        """
+        self.policy_net：创建策略网络 Q(s, a; theta)。
+        self.target_net：创建目标网络 Q(s, a; theta_minus)。
+        self.target_net.load_state_dict(...)：DQN 关键步骤！初始化时，将 theta 的权重复制给 theta_minus，使两个网络一开始完全相同。
+        self.target_net.eval()：将目标网络设为评估模式，关闭 dropout 等。
+        self.optimizer：创建 Adam 优化器，注意它只优化 policy_net 的参数。
+        self.loss_fn = nn.SmoothL1Loss()：设置损失函数。
+        这里用的是 Smooth L1 Loss (Huber Loss)，而不是 MSE (L2 Loss)。这是一个小技巧，
+        Smooth L1 Loss 对异常值（即 TD 误差很大时）不那么敏感，使训练更稳健。
+        self.epsilon_schedule：初始化 $\epsilon$-greedy 策略的衰减器。
+        """
 
         action_dim = act_space.n
         self.policy_net = QNetwork(self.obs_dim, action_dim).to(device)

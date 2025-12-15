@@ -1,4 +1,4 @@
-# rlx/core/utils.py
+# rlx/core/utils.py 模块
 """
 提供一系列在整个框架中可重用的、与具体算法无关的辅助函数。
 

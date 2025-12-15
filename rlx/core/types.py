@@ -1,4 +1,4 @@
-# rlx/core/types.py
+# rlx/core/types.py 模块
 """
 该模块定义了在整个框架中使用的、标准化的数据结构类型。
 使用明确的类型定义 (如 `Batch`, `Transition`, `Config`) 可以极大地提高代码的

@@ -1,4 +1,4 @@
-# Core dependencies
+# 核心依赖
 torch
 gymnasium
 gymnasium[atari,other]
@@ -12,7 +12,7 @@ loguru
 tensorboard
 wandb
 
-# Development and linting
+# 开发与代码检查
 ruff
 mypy
 black

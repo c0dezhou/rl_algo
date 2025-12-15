@@ -1,0 +1,7 @@
+# rlx/config/a2c.yaml 文件
+# A2C 智能体默认配置
+gamma: 0.99
+lr: 0.0003
+value_coef: 0.5
+entropy_coef: 0.01
+total_steps: 200000

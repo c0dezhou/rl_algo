@@ -1,5 +1,5 @@
-# rlx/config/dqn.yaml
-# Default configuration for the DQN agent on Classic Control tasks such as CartPole.
+# rlx/config/dqn.yaml 文件
+# 适用于 CartPole 等经典控制任务的 DQN 智能体默认配置。
 gamma: 0.99
 lr: 0.001
 buffer_size: 100000

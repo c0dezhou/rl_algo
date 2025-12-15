@@ -1,4 +1,4 @@
-# rlx/envs/make_env.py
+# rlx/envs/make_env.py 模块
 """
 该模块提供一个工厂函数 `make_env`, 用于创建和配置 Gymnasium 环境。
 

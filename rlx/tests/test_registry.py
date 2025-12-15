@@ -5,21 +5,20 @@ import pytest
 from rlx.core.registry import registry
 from rlx.core.utils import dynamic_import_agents
 
-# Fixture to run dynamic import once before all tests
+# 在所有测试运行前执行一次动态导入的夹具
 @pytest.fixture(scope="session", autouse=True)
 def setup_registry():
     dynamic_import_agents()
 
 def test_agents_are_registered():
-    """Test that our three agents are correctly registered."""
+    """验证智能体是否都被正确注册。"""
     registered_agents = registry.list_agents()
-    assert "mc" in registered_agents
-    assert "qlearning" in registered_agents
-    assert "sarsa" in registered_agents
+    for name in ("mc", "qlearning", "sarsa", "dqn", "ppo", "a2c", "reinforce"):
+        assert name in registered_agents
     print(f"\n[TEST] Registered agents: {registered_agents}")
 
 def test_create_agent_for_each_registered():
-    """Test if we can successfully create an agent for each registered algorithm."""
+    """检查是否能为每个已注册算法成功创建智能体实例。"""
     env = gym.make("CartPole-v1")
     registered_agents = registry.list_agents()
     

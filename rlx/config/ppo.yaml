@@ -1,0 +1,13 @@
+# rlx/config/ppo.yaml 文件
+# PPO 智能体默认配置
+gamma: 0.99
+lr: 0.0003
+total_steps: 1000000
+update_epochs: 4
+minibatch_size: 64
+clip_coef: 0.2
+value_coef: 0.5
+entropy_coef: 0.01
+max_grad_norm: 0.5
+use_gae: true
+gae_lambda: 0.95
