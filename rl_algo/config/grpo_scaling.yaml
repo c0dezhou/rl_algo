@@ -1,0 +1,28 @@
+gamma: 0.99
+# GRPO-Scaling 默认配置（我用来跑论文/报告的）
+total_steps: 200000
+
+# 一次 update 攒多少条完整轨迹
+batch_episodes: 8
+group_size: 8
+
+hidden_dim: 128
+actor_lr: 0.0003
+
+update_epochs: 4
+minibatch_size: 256
+clip_coef: 0.2
+entropy_coef: 0.01
+max_grad_norm: 0.5
+
+# KL penalty（采样 KL），0 表示不加
+kl_coef: 0.1
+
+# episode 级 mask（需要 train.py 传 episode_ids）
+offpolicy_mask_enabled: true
+offpolicy_kl_threshold: 0.1
+offpolicy_adv_threshold: 0.0
+
+# action_mask（CartPole 用不到，但接口先留着）
+keep_action_mask: true
+action_mask_value: -1000000000.0

@@ -10,6 +10,9 @@ __pycache__/
 runs/
 videos/
 models/
+figs/
+results/
+fig_list.md
 
 # 构建产物
 *.egg-info/

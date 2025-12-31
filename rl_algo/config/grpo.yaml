@@ -1,0 +1,21 @@
+gamma: 0.99
+# GRPO 默认配置（CartPole-v1）
+total_steps: 200000
+
+# 一次 update 攒多少条完整轨迹
+batch_episodes: 8
+
+# group_size：GRPO 这边习惯叫 group_size（默认就等于 batch_episodes）
+group_size: 8
+
+# 网络结构
+hidden_dim: 128
+
+# 学习率
+actor_lr: 0.0003
+
+update_epochs: 4
+minibatch_size: 256
+clip_coef: 0.2
+entropy_coef: 0.01
+max_grad_norm: 0.5

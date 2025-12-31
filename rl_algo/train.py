@@ -1,377 +1,543 @@
-# rlx/train.py 文件
-"""
-一个统一的训练脚本,用于启动、管理和监控任何已注册的强化学习算法的训练过程。
-
-该脚本是整个框架的执行入口。它负责处理以下核心任务：
-1.  **命令行参数解析**: 使用 `argparse` 解析用户输入的参数,如算法名称、环境 ID、
-    配置文件路径、总训练步数、随机种子等。
-
-2.  **配置加载与覆盖**: 从指定的 YAML 文件加载算法配置,并允许用户通过命令行
-    参数 `--override-cfg` 动态覆盖个别超参数,便于快速实验和调参。
-
-3.  **环境和智能体创建**: 根据参数创建指定的 Gym 环境和 RL 智能体实例。
-
-4.  **主训练循环**: 实现了通用的训练循环,能够适应不同类型的 RL 算法：
-    - **异策略 (Off-Policy)** 算法 (如 DQN): 从经验回放池 (Replay Buffer) 中采样数据进行训练。
-    - **同策略 (On-Policy) 且基于轨迹**的算法 (如 PPO): 收集完整的回合 (episode) 数据后进行训练。
-    - **同策略 (On-Policy) 且基于单步**的算法 (如 SARSA): 在每个时间步进行训练。
-
-5.  **模型评估与保存**:
-    - 在训练过程中,定期评估模型性能,并保存表现最佳的模型 (`best.pt`)。
-    - 训练结束后,保存最终模型 (`final.pt`)。
-    - 支持从检查点 (`checkpoint`) 恢复训练,继续之前的进度。
-"""
+from __future__ import annotations
 
 import argparse
-import os
-import random
+import csv
 import time
 from pathlib import Path
+from typing import Any, Dict, List
 
-# 这是一个用于 argparse 的辅助函数, 能够将命令行中输入的 "true", "yes", "1" 等字符串智能地解析为布尔值 True, 否则为 False。
-def str_to_bool(val: str) -> bool:
-    if isinstance(val, bool):
-        return val
-    val_l = str(val).lower()
-    return val_l in ("yes", "true", "t", "1")
-
-from typing import Any, Dict, Type
-
-import gymnasium as gym
 import numpy as np
 import torch
 import yaml
-from pydantic import BaseModel
-from torch.utils.tensorboard import SummaryWriter
 
+from rl_algo.algos import create_agent, list_algos, load_config
 from rl_algo.core.buffers import ReplayBuffer
-from rl_algo.core.registry import registry
-from rl_algo.core.utils import set_seed, dynamic_import_agents
-from rl_algo.core.types import Batch, Transition
+from rl_algo.core.utils import set_seed
 from rl_algo.envs.make_env import make_env
 
-# 动态导入所有在 `rlx/algos` 目录下的算法, 这一步是实现算法自动注册的关键。
-# 执行后, `registry` 对象中将包含所有已发现的算法及其配置。
-dynamic_import_agents()
 
 def parse_args():
-    """解析命令行参数,为训练提供所有必要的配置。"""
-    parser = argparse.ArgumentParser(description="rl-gym 统一训练脚本")
-    parser.add_argument("--algo", type=str, required=True, help="要训练的算法名称 (例如: 'qlearning', 'ppo')。")
-    parser.add_argument("--env-id", type=str, default="CartPole-v1", help="要使用的 Gymnasium 环境 ID。")
-    parser.add_argument("--config", type=str, required=True, help="指向算法特定配置的 YAML 文件的路径。")
-    parser.add_argument("--total-steps", type=int, default=50000, help="训练过程的总时间步数。")
-    parser.add_argument("--seed", type=int, default=42, help="用于 PyTorch, NumPy 和环境的随机种子,以确保实验的可复现性。")
-    parser.add_argument("--device", type=str, default="auto", help="指定计算设备 ('cpu', 'cuda', 或 'auto' 自动选择)。")
-    parser.add_argument("--render", type=str_to_bool, default=False, nargs="?", const=True, help="如果设置,则在训练期间实时渲染环境画面。")
-    parser.add_argument("--resume-from-checkpoint", type=str, default=None, help="提供一个检查点文件的路径 (.pt), 从中恢复训练。")
-    parser.add_argument("--eval-frequency", type=int, default=10000, help="模型评估的频率 (以总步数为单位)。")
-    parser.add_argument("--eval-episodes", type=int, default=10, help="每次评估时运行的回合数,以获得更稳定的性能度量。")
-    # 允许通过命令行动态覆盖 YAML 文件中的配置参数,这对于快速实验和超参数搜索非常有用。
-    # 示例: --override-cfg lr=1e-3 gamma=0.98
-    parser.add_argument('--override-cfg', nargs='*', help="覆盖配置参数。示例: --override-cfg lr=1e-3 actor.lr=0.001")
-
+    parser = argparse.ArgumentParser(description="rl_algo 统一训练入口（精简版）")
+    parser.add_argument("--algo", type=str, required=True, help="算法名称，例如 ppo / dqn / qlearning / sarsa / mc ...")
+    parser.add_argument("--env-id", type=str, default="CartPole-v1")
+    parser.add_argument(
+        "--config",
+        type=str,
+        default=None,
+        help="可选：yaml 配置路径；不传则默认读取 `rl_algo/config/{algo}.yaml`（若存在）。",
+    )
+    parser.add_argument("--total-steps", type=int, default=None, help="覆盖配置中的 total_steps（可选）。")
+    parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--device", type=str, default="auto", choices=["auto", "cpu", "cuda"])
+    parser.add_argument("--render", action="store_true")
+    parser.add_argument(
+        "--eval-frequency",
+        type=int,
+        default=0,
+        help="可选：每隔多少 step 做一次贪心评估（0 表示关闭；评估不参与训练）。",
+    )
+    parser.add_argument("--eval-episodes", type=int, default=5, help="每次评估跑多少回合。")
+    parser.add_argument(
+        "--batch-episodes",
+        type=int,
+        default=None,
+        help="trajectory-on-policy 算法每次 update 收集多少条完整轨迹；不传则用配置里的 batch_episodes（默认 1）。",
+    )
     return parser.parse_args()
 
-def load_config(config_path: str, algo: str, overrides: list[str] | None) -> BaseModel:
-    """
-    加载、解析并覆盖算法的配置。
-    1. 从注册表中获取算法对应的 Pydantic 配置类。
-    2. 加载基础的 YAML 配置文件。
-    3. 如果有命令行覆盖项,则解析并更新配置。
-    4. 使用最终的配置字典实例化 Pydantic 配置类,进行类型验证。
-    """
-    config_class = registry.get_config_class(algo)
-    if not config_class:
-        raise ValueError(f"算法 '{algo}' 在注册表中没有找到对应的配置类。")
 
-    with open(config_path, 'r') as f:
-        yaml_config = yaml.safe_load(f)
-    
-    # 处理命令行覆盖
-    if overrides:
-        for override in overrides:
-            k, v = override.split("=")
-            try:
-                # 尝试将值解析为 Python 对象 (例如, '1e-3' -> 0.001, 'True' -> True)
-                v = eval(v)
-            except (NameError, SyntaxError):
-                # 如果解析失败,则保持其为字符串 (例如, 'my_string')
-                pass 
+def resolve_device(device: str):
+    if device == "auto":
+        return torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    return torch.device(device)
 
-            # 更新配置字典,支持点分隔的嵌套键 (e.g., 'actor.lr=0.1')
-            keys = k.split('.')
-            d = yaml_config # d 是指向 yaml_config 的指针,直接修改 d 会改变 yaml_config
-            for key_part in keys[:-1]:
-                # 如果嵌套的字典不存在,则当场创建一个
-                d = d.setdefault(key_part, {})
-            d[keys[-1]] = v
-    
-    # 使用最终的配置字典实例化 Pydantic 模型,这会进行数据验证和类型转换
-    return config_class(**yaml_config)
 
-def main():
-    args = parse_args()
-
-    # ================== 1. 初始化设置 ==================
-    # 自动选择设备
-    if args.device == "auto":
-        device = "cuda" if torch.cuda.is_available() else "cpu"
+def save_config_snapshot(path: Path, config: Any):
+    # 把这次跑的配置存一份，后面写报告/复现实验用
+    if hasattr(config, "to_dict"):
+        cfg_dict = config.to_dict()
     else:
-        device = args.device
-    print(f"正在使用设备: {device}")
+        cfg_dict = dict(getattr(config, "__dict__", {}))
+    path.write_text(yaml.safe_dump(cfg_dict, sort_keys=False), encoding="utf-8")
 
-    # 加载配置,并允许命令行总步数覆盖文件中的设置
-    config = load_config(args.config, args.algo, args.override_cfg)
-    if args.total_steps:
-        setattr(config, "total_steps", args.total_steps)
-    
-    # 创建一个唯一的运行名称,用于日志和模型保存
-    run_name = f"{args.env_id}__{args.algo}__{args.seed}__{int(time.time())}"
-    writer = SummaryWriter(log_dir=os.path.join("runs", run_name))
 
-    # 设置全局随机种子以保证实验的可复现性
-    set_seed(args.seed)
+def build_flat_batch(batch_episodes: List[Dict[str, Any]], device: torch.device):
+    # 把多条 episode 拼成一个大 batch（按 step 拼接），update 的时候更省事
+    batch: Dict[str, torch.Tensor] = {
+        "observations": torch.cat([ep["observations"] for ep in batch_episodes], dim=0),
+        "actions": torch.cat([ep["actions"] for ep in batch_episodes], dim=0),
+        "rewards": torch.cat([ep["rewards"] for ep in batch_episodes], dim=0).to(device),
+        "dones": torch.cat([ep["dones"] for ep in batch_episodes], dim=0).to(device),
+    }
+    # 每个 step 属于哪条 episode（GRPO-Scaling 的 episode mask 会用到）
+    ep_ids: list[torch.Tensor] = []
+    for ep_i, ep in enumerate(batch_episodes):
+        T = int(ep["rewards"].shape[0])
+        ep_ids.append(torch.full((T,), int(ep_i), device=device, dtype=torch.long))
+    batch["episode_ids"] = torch.cat(ep_ids, dim=0)
+    if all("log_probs" in ep for ep in batch_episodes):
+        batch["log_probs"] = torch.cat([ep["log_probs"] for ep in batch_episodes], dim=0)
+    if all("values" in ep for ep in batch_episodes):
+        batch["values"] = torch.cat([ep["values"] for ep in batch_episodes], dim=0)
+    return batch
 
-    # ================== 2. 创建环境和智能体 ==================
-    render_mode = "human" if args.render else None
-    env = make_env(
-        args.env_id,
-        args.seed,
-        render_mode=render_mode,
+
+def add_gae_advantages_and_returns(batch: Dict[str, torch.Tensor], config: Any, device: torch.device):
+    # GAE 我这里就按最常见那套写（只需要 rewards/dones/values）
+    #
+    # 公式记三行就够了：
+    # delta：δ_t = r_t + γ * V(s_{t+1}) * (1-done_t) - V(s_t)
+    # GAE：  A_t = δ_t + γ * λ * (1-done_t) * A_{t+1}
+    # return：R_t = A_t + V(s_t)
+    rewards = batch["rewards"].to(device).view(-1)
+    dones = batch["dones"].to(device).view(-1)
+    values = batch.get("values")
+    if values is None:
+        raise ValueError("GAE 需要 batch['values']（agent.select_action 必须返回 value）。")
+    values = values.to(device).view(-1)
+
+    gamma = float(getattr(config, "gamma", 0.99))
+    lam = float(getattr(config, "gae_lambda", 0.95))
+
+    # 从后往前推 A（遇到 done 就断开）
+    advantages = torch.zeros_like(rewards, device=device)
+    last_gae = torch.tensor(0.0, dtype=torch.float32, device=device)
+    for t in reversed(range(rewards.shape[0])):
+        next_value = values[t + 1] if (t + 1) < rewards.shape[0] else torch.tensor(0.0, device=device)
+        non_terminal = 1.0 - dones[t]
+        delta = rewards[t] + gamma * next_value * non_terminal - values[t]
+        last_gae = delta + gamma * lam * non_terminal * last_gae
+        advantages[t] = last_gae
+
+    # PPO 里一般直接用：return = A + V
+    batch["advantages"] = advantages.unsqueeze(1)
+    batch["returns"] = (advantages + values).unsqueeze(1)
+
+
+def add_grpo_group_advantages(batch: Dict[str, torch.Tensor], batch_episodes: List[Dict[str, Any]], device: torch.device):
+    # GRPO：没有 critic，所以优势我就用“组内回报归一化”
+    # R_i = sum_t r_{i,t}
+    # A_i = (R_i - mean(R)) / (std(R) + eps)
+    # 然后把 A_i 直接广播到这条轨迹里的每一步
+    episode_returns = np.asarray([float(ep["episode_return"]) for ep in batch_episodes], dtype=np.float32)
+    mean = float(episode_returns.mean())
+    std = float(episode_returns.std())
+    eps = 1e-8
+
+    adv_list: list[torch.Tensor] = []
+    for ep in batch_episodes:
+        A = (float(ep["episode_return"]) - mean) / (std + eps)
+        T = int(ep["rewards"].shape[0])
+        adv_list.append(torch.full((T, 1), float(A), device=device, dtype=torch.float32))
+    batch["advantages"] = torch.cat(adv_list, dim=0)
+
+
+def _init_csv(path: Path, fieldnames: list[str]):
+    with open(path, "w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer.writeheader()
+
+
+def _append_csv(path: Path, fieldnames: list[str], row: Dict[str, Any]):
+    with open(path, "a", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer.writerow(row)
+
+    # 如果没法做软链接，我就多写一份到 train_log.csv / eval_log.csv，保证老脚本还能读
+    if path.name.startswith("train_log__"):
+        compat = path.with_name("train_log.csv")
+        if compat.exists() and compat != path:
+            with open(compat, "a", newline="", encoding="utf-8") as f2:
+                writer2 = csv.DictWriter(f2, fieldnames=fieldnames)
+                writer2.writerow(row)
+    if path.name.startswith("eval_log__"):
+        compat = path.with_name("eval_log.csv")
+        if compat.exists() and compat != path:
+            with open(compat, "a", newline="", encoding="utf-8") as f2:
+                writer2 = csv.DictWriter(f2, fieldnames=fieldnames)
+                writer2.writerow(row)
+
+
+def _action_to_int(action: Any):
+    if isinstance(action, torch.Tensor):
+        return int(action.detach().cpu().numpy()[0])
+    return int(action)
+
+
+def _evaluate(eval_env, agent, seed: int, episodes: int, device: torch.device, global_step: int):
+    returns: list[float] = []
+    for ep_i in range(int(episodes)):
+        obs_eval, _ = eval_env.reset(seed=int(seed) + 20_000 + ep_i)
+        done_eval = False
+        ep_return = 0.0
+        while not done_eval:
+            obs_t_eval = torch.tensor(obs_eval, dtype=torch.float32, device=device).unsqueeze(0)
+            action_eval, _info = agent.select_action(obs_t_eval, explore=False, global_step=global_step)
+            obs_eval, r, terminated, truncated, _ = eval_env.step(_action_to_int(action_eval))
+            done_eval = bool(terminated or truncated)
+            ep_return += float(r)
+        returns.append(ep_return)
+    return float(sum(returns) / max(1, len(returns)))
+
+
+def _log_episode(
+    train_log_path: Path,
+    episode_idx: int,
+    ep_return: float,
+    ep_len: int,
+    start_time: float,
+    recent_returns: list[float],
+    global_step: int,
+):
+    elapsed_sec = float(time.time() - start_time)
+    _append_csv(
+        train_log_path,
+        ["episode_idx", "episodic_return", "episodic_length", "elapsed_sec"],
+        {
+            "episode_idx": int(episode_idx),
+            "episodic_return": float(ep_return),
+            "episodic_length": int(ep_len),
+            "elapsed_sec": float(elapsed_sec),
+        },
     )
-    agent = registry.create_agent(args.algo, env.observation_space, env.action_space, config, device)
 
-    # 准备模型保存目录
-    save_path = f"models/{run_name}"
-    os.makedirs(save_path, exist_ok=True)
+    recent_returns.append(float(ep_return))
+    if len(recent_returns) > 10:
+        recent_returns.pop(0)
+    ma10 = float(sum(recent_returns) / max(1, len(recent_returns)))
+    print(f"step={global_step:>7} | ep={episode_idx:>4} | return={ep_return:>6.1f} | ma10={ma10:>6.1f} | len={ep_len:>3}")
 
-    # 如果是异策略 (Off-Policy) 算法,则初始化经验回放池 (Replay Buffer)
-    is_off_policy = hasattr(config, "buffer_size") 
-    buffer = None 
-    if is_off_policy:
-        buffer = ReplayBuffer(config.buffer_size, env.observation_space, env.action_space, device)
 
-    # ================== 3. 训练循环设置 ==================
-    # 根据算法类型设置不同的数据收集和更新策略标志
-    algo = args.algo
-    # 基于完整轨迹更新的同策略算法
-    trajectory_on_policy = algo in {"ppo", "a2c", "reinforce", "mc"}
-    # 基于单步更新的同策略算法（逐步更新）
-    step_on_policy = algo in {"sarsa", "td0", "qlearning"}
+def _maybe_eval(eval_env, eval_log_path: Path, args, agent, device: torch.device, global_step: int):
+    if eval_env is None:
+        return
+    if int(args.eval_frequency) <= 0:
+        return
+    if global_step % int(args.eval_frequency) != 0:
+        return
 
-    # 为基于轨迹的同策略算法准备临时缓冲区
-    traj_obs, traj_actions, traj_log_probs, traj_rewards, traj_values, traj_dones = [], [], [], [], [], []
-    
-    # 初始化环境和训练状态
-    obs, _ = env.reset(seed=args.seed)
+    avg = _evaluate(eval_env, agent, int(args.seed), int(args.eval_episodes), device, global_step)
+    _append_csv(
+        eval_log_path,
+        ["global_step", "eval_return_mean"],
+        {"global_step": int(global_step), "eval_return_mean": float(avg)},
+    )
+    print(f"[eval] step={global_step} | avg_return={avg:.1f}")
+
+
+def train_off_policy(env, eval_env, agent, config: Any, args, device: torch.device, train_log_path: Path, eval_log_path: Path):
+    buffer = ReplayBuffer(int(getattr(config, "buffer_size", 100_000)), env.observation_space, env.action_space, device)
+
+    obs, _ = env.reset(seed=int(args.seed))
     global_step = 0
-    best_return = float("-inf") # 用于追踪最佳模型
+    episode_idx = 0
+    episode_return_acc = 0.0
+    episode_len_acc = 0
+    start_time = time.time()
+    recent_returns: list[float] = []
 
-    # ================== 4. 检查点 (Checkpoint) 功能 ==================
-    def save_checkpoint(path: str, step: int):
-        """保存检查点,包括训练步数、智能体状态和当前记录的最佳回报。"""
-        agent_state = agent.save()
-        torch.save({
-            'global_step': step,
-            'agent_state_dict': agent_state,
-            'best_return': best_return,
-            }, path)
-        
-    # 如果提供了检查点路径,则从中恢复训练
-    if args.resume_from_checkpoint and os.path.exists(args.resume_from_checkpoint):
-        print(f"从检查点恢复训练: {args.resume_from_checkpoint}")
-        checkpoint = torch.load(args.resume_from_checkpoint, map_location=device, weights_only=False)
-        agent.load(checkpoint['agent_state_dict'])
-        global_step = checkpoint.get('global_step', 0)
-        best_return = checkpoint.get('best_return', float("-inf"))
-        print(f"已从第 {global_step} 步恢复, 记录的最佳回报为 {best_return:.2f}")
+    while global_step < int(getattr(config, "total_steps", 0)):
+        obs_t = torch.tensor(obs, dtype=torch.float32, device=device).unsqueeze(0)
+        action, _info = agent.select_action(obs_t, explore=True, global_step=global_step)
+        action_env = _action_to_int(action)
 
-    
-    # ================== 5. 评估函数 ==================
-    def evaluate_agent(agent_state_dict: Dict, episodes: int = 5) -> float:
-        """使用给定的智能体状态在单独的环境中进行评估。"""
-        print("\n--- 开始评估 ---")
-        
-        # 创建一个独立的评估环境,以确保评估的纯粹性
-        eval_env = make_env(
-            env_id=args.env_id,
-            seed=args.seed + 1,  # 使用不同的种子以避免与训练环境产生偏差
-            render_mode=None,    # 评估时通常不渲染
-        )
-        
-        # 创建一个新的智能体实例并加载要评估的状态
-        eval_agent = registry.create_agent(
-            args.algo, 
-            eval_env.observation_space, 
-            eval_env.action_space, 
-            config, 
-            device
-        )
-        eval_agent.load(agent_state_dict)
-        
-        total_rewards = []
-        for ep in range(episodes):
-            obs_ep, _ = eval_env.reset(seed=(args.seed + ep + 1))
-            done_ep = False
-            frames = 0
-            
-            while not done_ep:
-                # 将单个观测数据扩展为一个批次 (BatchSize=1) 以匹配网络输入
-                obs_t = torch.tensor(obs_ep, dtype=torch.float32, device=device).unsqueeze(0)
-                
-                # 关键: 在评估时关闭探索 (explore=False), 让智能体使用其学到的最佳策略
-                action, _ = eval_agent.select_action(
-                    obs_t, 
-                    explore=False, 
-                    global_step=global_step
-                )
-                action_np = action.cpu().numpy()[0] if isinstance(action, torch.Tensor) else action
-                
-                obs_ep, reward, terminated, truncated, info = eval_env.step(action_np)
-                done_ep = terminated or truncated
-                frames += 1
-            
-            # `RecordEpisodeStatistics` 包装器会在回合结束时将回报和长度记录在 info 字典中
-            if "episode" in info:
-                ep_r = info["episode"]["r"]
-                total_rewards.append(ep_r)
-                print(f"[评估] 回合={ep+1}/{episodes}, 帧数={frames}, 回报={ep_r:.2f}")
-            else:
-                print(f"[评估] 回合={ep+1}/{episodes} 完成 (警告: 未在 info 中找到 'episode' 数据)")
+        next_obs, reward, terminated, truncated, info = env.step(action_env)
+        episode_done = bool(terminated or truncated)
 
-        eval_env.close()
+        # DQN 用 bootstrap：TimeLimit 截断别当 done（不然满分附近学得很奇怪）
+        done_for_learning = bool(terminated)
 
-        if total_rewards:
-            avg_reward = sum(total_rewards) / len(total_rewards)
-            print(f"[评估] {episodes} 个回合的平均回报: {avg_reward:.2f}")
-            print("--- 评估结束 ---\n")
-            return avg_reward
-        
-        print("[评估] 未能收集到任何回报数据。")
-        print("--- 评估结束 ---\n")
-        return 0.0
-    
-    # ================== 6. 主训练循环 ==================
-    print(f"开始训练 {args.algo} 算法, 共 {config.total_steps} 步...")
-    while global_step < config.total_steps:
-        # a. 与环境交互
-        obs_tensor = torch.tensor(obs, dtype=torch.float32, device=device).unsqueeze(0)
-        action, agent_info = agent.select_action(obs_tensor, global_step=global_step)
-        action_np = action.cpu().numpy()[0] if isinstance(action, torch.Tensor) else action
-
-        next_obs, reward, terminated, truncated, info = env.step(action_np)
-        done = terminated or truncated
         global_step += 1
+        episode_return_acc += float(reward)
+        episode_len_acc += 1
 
-        transition: Transition = {
-            "obs": obs_tensor, "action": torch.as_tensor(action, device=device),
-            "reward": reward, "next_obs": torch.tensor(next_obs, dtype=torch.float32, device=device).unsqueeze(0),
-            "done": done, **(agent_info or {}),
+        buffer.add(obs, action_env, float(reward), next_obs, done_for_learning)
+
+        batch_size = int(getattr(config, "batch_size", 64))
+        train_frequency = int(getattr(config, "train_frequency", 1))
+        gradient_steps = int(getattr(config, "gradient_steps", 1))
+        learning_starts = int(getattr(config, "learning_starts", batch_size))
+
+        if len(buffer) >= max(batch_size, learning_starts) and global_step % train_frequency == 0:
+            for _ in range(max(1, gradient_steps)):
+                batch = buffer.sample(batch_size)
+                agent.update(batch, global_step)
+
+        obs = next_obs
+        if episode_done:
+            episode_idx += 1
+            if "episode" in info:
+                ep_return = float(info["episode"]["r"])
+                ep_len = int(info["episode"]["l"])
+            else:
+                ep_return = float(episode_return_acc)
+                ep_len = int(episode_len_acc)
+            _log_episode(train_log_path, episode_idx, ep_return, ep_len, start_time, recent_returns, global_step)
+
+            episode_return_acc = 0.0
+            episode_len_acc = 0
+            obs, _ = env.reset()
+
+        _maybe_eval(eval_env, eval_log_path, args, agent, device, global_step)
+
+    return global_step
+
+
+def train_step_on_policy(env, eval_env, agent, config: Any, args, device: torch.device, train_log_path: Path, eval_log_path: Path):
+    obs, _ = env.reset(seed=int(args.seed))
+    global_step = 0
+    episode_idx = 0
+    episode_return_acc = 0.0
+    episode_len_acc = 0
+    start_time = time.time()
+    recent_returns: list[float] = []
+
+    while global_step < int(getattr(config, "total_steps", 0)):
+        obs_t = torch.tensor(obs, dtype=torch.float32, device=device).unsqueeze(0)
+        action, agent_info = agent.select_action(obs_t, explore=True, global_step=global_step)
+        action_env = _action_to_int(action)
+
+        next_obs, reward, terminated, truncated, info = env.step(action_env)
+        episode_done = bool(terminated or truncated)
+
+        # Q-learning / SARSA 也是 bootstrap：TimeLimit 截断别当 done
+        done_for_learning = bool(terminated)
+
+        global_step += 1
+        episode_return_acc += float(reward)
+        episode_len_acc += 1
+
+        transition = {
+            "obs": obs_t,
+            "action": torch.as_tensor(action, device=device),
+            "reward": float(reward),
+            "next_obs": torch.tensor(next_obs, dtype=torch.float32, device=device).unsqueeze(0),
+            "done": done_for_learning,
+            **(agent_info or {}),
         }
 
-        # 特殊处理: SARSA 算法需要在更新时知道下一个状态的下一个动作
-        if algo == "sarsa":
+        if args.algo == "sarsa":
             next_action, _ = agent.select_action(transition["next_obs"], explore=True, global_step=global_step)
             transition["next_action"] = next_action
 
-        # b. 根据算法类型进行数据存储和模型更新
-        if is_off_policy:
-            buffer.add(obs, action_np, reward, next_obs, done)
-            if global_step > config.batch_size and global_step % config.train_frequency == 0:
-                batch = buffer.sample(config.batch_size)
-                metrics = agent.update(batch, global_step)
-                if global_step % 100 == 0 and metrics:
-                    for key, value in metrics.items():
-                        writer.add_scalar(f"train/{key}", value, global_step)
+        agent.train_step(transition)
 
-        elif trajectory_on_policy:
-            traj_obs.append(obs_tensor)
-            traj_actions.append(transition["action"])
-            traj_rewards.append(reward)
-            traj_dones.append(done)
-            if "log_prob" in agent_info: traj_log_probs.append(agent_info["log_prob"])
-            if "value" in agent_info: traj_values.append(agent_info["value"])
-
-            if done: # 当一个回合结束时, 处理收集到的整个轨迹
-                b_obs = torch.cat(traj_obs, dim=0)
-                b_actions = torch.stack(traj_actions, dim=0)
-                
-                batch_like: Batch = {
-                    "observations": b_obs,
-                    "actions": b_actions,
-                    "rewards": torch.tensor(traj_rewards, dtype=torch.float32, device=device),
-                    "dones": torch.tensor(traj_dones, dtype=torch.float32, device=device),
-                }
-                if traj_log_probs: batch_like["log_probs"] = torch.stack(traj_log_probs, dim=0)
-                
-                # 为 PPO 等使用 GAE 的算法计算优势 (Advantage) 和回报 (Return)
-                if getattr(config, "use_gae", False) and traj_values:
-                    values = torch.stack(traj_values, dim=0).squeeze(-1)
-                    rewards = torch.tensor(traj_rewards, dtype=torch.float32, device=device)
-                    dones_mask = torch.tensor(traj_dones, dtype=torch.float32, device=device)
-                    gamma, lam = config.gamma, config.gae_lambda
-                    advantages = torch.zeros_like(rewards)
-                    last_gae = 0.0
-                    for t in reversed(range(len(rewards))):
-                        next_val = values[t + 1] if t + 1 < len(values) else 0.0
-                        delta = rewards[t] + gamma * next_val * (1.0 - dones_mask[t]) - values[t]
-                        last_gae = delta + gamma * lam * (1.0 - dones_mask[t]) * last_gae
-                        advantages[t] = last_gae
-                    batch_like["advantages"] = advantages.unsqueeze(1)
-                    batch_like["returns"] = (advantages + values).unsqueeze(1)
-
-                metrics = agent.update(batch_like, global_step)
-                if metrics and global_step % 100 == 0:
-                    for key, value in metrics.items(): writer.add_scalar(f"train/{key}", value, global_step)
-
-                # 清空轨迹缓冲区,为下一个回合做准备
-                traj_obs.clear(); traj_actions.clear(); traj_log_probs.clear(); traj_rewards.clear(); traj_values.clear(); traj_dones.clear()
-
-        elif step_on_policy:
-            metrics = agent.train_step(transition)
-            if metrics and global_step % 100 == 0:
-                for key, value in metrics.items(): writer.add_scalar(f"train/{key}", value, global_step)
-
-        # c. 处理回合结束逻辑
         obs = next_obs
-        if done:
+        if episode_done:
+            episode_idx += 1
             if "episode" in info:
-                ep_r, ep_l = info["episode"]["r"], info["episode"]["l"]
-                print(f"步数={global_step}, 回合回报={ep_r:.2f}, 回合长度={ep_l}")
-                writer.add_scalar("charts/episodic_return", ep_r, global_step)
-                writer.add_scalar("charts/episodic_length", ep_l, global_step)
-                
-                # 如果获得更高回报,则保存为最佳模型
-                if ep_r > best_return:
-                    best_return = ep_r
-                    best_path = f"{save_path}/best.pt"
-                    save_checkpoint(best_path, global_step)
-                    print(f"发现新的最佳回报={best_return:.2f}, 模型已保存至 {best_path}")
+                ep_return = float(info["episode"]["r"])
+                ep_len = int(info["episode"]["l"])
+            else:
+                ep_return = float(episode_return_acc)
+                ep_len = int(episode_len_acc)
+            _log_episode(train_log_path, episode_idx, ep_return, ep_len, start_time, recent_returns, global_step)
+
+            episode_return_acc = 0.0
+            episode_len_acc = 0
             obs, _ = env.reset()
 
-        # d. 定期评估
-        if args.eval_frequency > 0 and global_step % args.eval_frequency == 0:
-            current_agent_state = agent.save()
-            avg_reward = evaluate_agent(current_agent_state, episodes=args.eval_episodes)
-            writer.add_scalar("charts/eval_return", avg_reward, global_step)
+        _maybe_eval(eval_env, eval_log_path, args, agent, device, global_step)
 
-    # ================== 7. 训练结束 ==================
-    final_path = f"{save_path}/final.pt"
-    save_checkpoint(final_path, global_step)
-    print(f"训练完成。最终模型已保存至 {final_path}")
+    return global_step
 
-    # 训练结束后,对最终模型进行一次最终评估
-    final_checkpoint = torch.load(final_path, map_location=device, weights_only=False)
-    evaluate_agent(final_checkpoint['agent_state_dict'], episodes=args.eval_episodes)
 
-    env.close()
-    writer.close()
-    if hasattr(args, "wandb_project") and args.wandb_project:
+def train_trajectory_on_policy(
+    env,
+    eval_env,
+    agent,
+    config: Any,
+    args,
+    device: torch.device,
+    train_log_path: Path,
+    eval_log_path: Path,
+):
+    # 轨迹类算法：攒够几条完整 episode 再 update
+    batch_episodes_target = int(args.batch_episodes or int(getattr(config, "batch_episodes", 1)))
+    if args.algo in ("grpo", "grpo_scaling"):
+        batch_episodes_target = int(getattr(config, "group_size", batch_episodes_target))
+
+    episode_obs: list[torch.Tensor] = []
+    episode_actions: list[torch.Tensor] = []
+    episode_log_probs: list[torch.Tensor] = []
+    episode_values: list[torch.Tensor] = []
+    episode_rewards: list[float] = []
+    episode_dones: list[bool] = []
+    batch_episodes: list[Dict[str, Any]] = []
+
+    obs, _ = env.reset(seed=int(args.seed))
+    global_step = 0
+    episode_idx = 0
+    episode_return_acc = 0.0
+    episode_len_acc = 0
+    start_time = time.time()
+    recent_returns: list[float] = []
+
+    while global_step < int(getattr(config, "total_steps", 0)):
+        obs_t = torch.tensor(obs, dtype=torch.float32, device=device).unsqueeze(0)
+        action, agent_info = agent.select_action(obs_t, explore=True, global_step=global_step)
+        action_env = _action_to_int(action)
+
+        next_obs, reward, terminated, truncated, info = env.step(action_env)
+        episode_done = bool(terminated or truncated)
+
+        global_step += 1
+        episode_return_acc += float(reward)
+        episode_len_acc += 1
+
+        # 先把这一条 episode 的数据攒起来
+        episode_obs.append(obs_t)
+        episode_actions.append(torch.as_tensor(action, device=device))
+        episode_rewards.append(float(reward))
+        episode_dones.append(bool(episode_done))
+        if agent_info and "log_prob" in agent_info:
+            episode_log_probs.append(agent_info["log_prob"])
+        if agent_info and "value" in agent_info:
+            episode_values.append(agent_info["value"])
+
+        if episode_done:
+            ep_obs = torch.cat(episode_obs, dim=0)
+            ep_actions = torch.stack(episode_actions, dim=0)
+            ep_rewards = torch.tensor(episode_rewards, dtype=torch.float32, device=device).view(-1)
+            ep_dones = torch.tensor(episode_dones, dtype=torch.float32, device=device).view(-1)
+
+            ep: Dict[str, Any] = {
+                "observations": ep_obs,
+                "actions": ep_actions,
+                "rewards": ep_rewards,
+                "dones": ep_dones,
+                "episode_return": float(sum(episode_rewards)),
+                "episode_length": int(len(episode_rewards)),
+            }
+            if episode_log_probs:
+                ep["log_probs"] = torch.stack(episode_log_probs, dim=0).view(-1)
+            if episode_values:
+                ep["values"] = torch.stack(episode_values, dim=0).view(-1)
+
+            batch_episodes.append(ep)
+
+            episode_obs.clear()
+            episode_actions.clear()
+            episode_log_probs.clear()
+            episode_values.clear()
+            episode_rewards.clear()
+            episode_dones.clear()
+
+            if len(batch_episodes) >= batch_episodes_target:
+                batch_like = build_flat_batch(batch_episodes, device=device)
+
+                if args.algo in ("grpo", "grpo_scaling"):
+                    add_grpo_group_advantages(batch_like, batch_episodes, device=device)
+                if bool(getattr(config, "use_gae", False)) and "values" in batch_like:
+                    add_gae_advantages_and_returns(batch_like, config, device=device)
+
+                agent.update(batch_like, global_step)
+                batch_episodes.clear()
+
+        obs = next_obs
+        if episode_done:
+            episode_idx += 1
+            if "episode" in info:
+                ep_return = float(info["episode"]["r"])
+                ep_len = int(info["episode"]["l"])
+            else:
+                ep_return = float(episode_return_acc)
+                ep_len = int(episode_len_acc)
+            _log_episode(train_log_path, episode_idx, ep_return, ep_len, start_time, recent_returns, global_step)
+
+            episode_return_acc = 0.0
+            episode_len_acc = 0
+            obs, _ = env.reset()
+
+        _maybe_eval(eval_env, eval_log_path, args, agent, device, global_step)
+
+    return global_step
+
+
+def main():
+    args = parse_args()
+    device = resolve_device(args.device)
+    set_seed(int(args.seed))
+
+    available_algos = list_algos()
+    if args.algo not in available_algos:
+        raise ValueError(f"未知算法：{args.algo}，可用算法：{available_algos}")
+
+    config = load_config(args.algo, args.config)
+    if args.total_steps is not None:
+        config.total_steps = int(args.total_steps)
+
+    render_mode = "human" if args.render else None
+    env = make_env(args.env_id, seed=int(args.seed), render_mode=render_mode)
+    eval_env = None
+    if int(args.eval_frequency) > 0:
+        eval_env = make_env(args.env_id, seed=int(args.seed) + 10_000, render_mode=None)
+
+    agent = create_agent(args.algo, env.observation_space, env.action_space, config, device)
+
+    run_name = f"{args.env_id}__{args.algo}__{args.seed}__{int(time.time())}"
+    run_dir = Path("models") / run_name
+    run_dir.mkdir(parents=True, exist_ok=True)
+    save_config_snapshot(run_dir / "config.yaml", config)
+
+    print(f"run_dir={run_dir}")
+    print(f"algo={args.algo}, env={args.env_id}, device={device}, total_steps={getattr(config, 'total_steps', 0)}")
+
+    if args.algo == "dqn":
+        algo_kind = "offpolicy"
+    elif args.algo in ("qlearning", "sarsa"):
+        algo_kind = "step_onpolicy"
+    else:
+        algo_kind = "traj_onpolicy"
+
+    # 日志名我写得长一点，后面整理论文表格省时间
+    train_log_named = run_dir / f"train_log__{args.env_id}__{args.algo}__{algo_kind}__seed{int(args.seed)}.csv"
+    train_log_path = run_dir / "train_log.csv"
+
+    _init_csv(train_log_named, ["episode_idx", "episodic_return", "episodic_length", "elapsed_sec"])
+    try:
+        if not train_log_path.exists():
+            train_log_path.symlink_to(train_log_named.name)
+    except Exception:
+        # 如果系统不支持软链接，就再写一份同样的表头
+        _init_csv(train_log_path, ["episode_idx", "episodic_return", "episodic_length", "elapsed_sec"])
+
+    eval_log_path = run_dir / "eval_log.csv"
+    if eval_env is not None:
+        eval_log_named = run_dir / f"eval_log__{args.env_id}__{args.algo}__{algo_kind}__seed{int(args.seed)}.csv"
+        _init_csv(eval_log_named, ["global_step", "eval_return_mean"])
         try:
-            import wandb
-            wandb.finish()
-        except Exception: pass
+            if not eval_log_path.exists():
+                eval_log_path.symlink_to(eval_log_named.name)
+        except Exception:
+            _init_csv(eval_log_path, ["global_step", "eval_return_mean"])
+
+    if args.algo == "dqn":
+        global_step = train_off_policy(env, eval_env, agent, config, args, device, train_log_named, eval_log_path)
+    elif args.algo in ("qlearning", "sarsa"):
+        global_step = train_step_on_policy(env, eval_env, agent, config, args, device, train_log_named, eval_log_path)
+    else:
+        global_step = train_trajectory_on_policy(
+            env, eval_env, agent, config, args, device, train_log_named, eval_log_path
+        )
+
+    final_path = run_dir / "final.pt"
+    torch.save(
+        {
+            "algo": args.algo,
+            "env_id": args.env_id,
+            "seed": int(args.seed),
+            "global_step": int(global_step),
+            "agent_state": agent.save(),
+            "config_path": str(args.config) if args.config is not None else None,
+        },
+        final_path,
+    )
+    env.close()
+    if eval_env is not None:
+        eval_env.close()
+    print(f"saved: {final_path}")
+
 
 if __name__ == "__main__":
     main()

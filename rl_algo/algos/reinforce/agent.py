@@ -1,7 +1,5 @@
-# rlx/algos/reinforce/agent.py 模块
-"""REINFORCE 策略梯度智能体实现。"""
-
-from typing import Dict, Tuple
+from dataclasses import dataclass
+from typing import Dict
 
 import gymnasium as gym
 import torch
@@ -9,10 +7,10 @@ from torch import nn
 from torch.distributions import Categorical
 
 from rl_algo.core.base_agent import BaseAgent
-from rl_algo.core.registry import registry
-from rl_algo.core.types import Batch, Config
+from rl_algo.core.types import Config
 
 
+@dataclass
 class ReinforceConfig(Config):
     """REINFORCE 智能体的配置结构定义。"""
 
@@ -34,12 +32,11 @@ class PolicyNet(nn.Module):
             nn.Linear(128, action_dim),
         )
 
-    def forward(self, obs: torch.Tensor) -> torch.Tensor:
+    def forward(self, obs: torch.Tensor):
         x = obs.view(obs.size(0), -1)
         return self.model(x)
 
 
-@registry.register_agent("reinforce", ReinforceConfig)
 class ReinforceAgent(BaseAgent):
     """无基线的 REINFORCE 策略梯度。"""
 
@@ -68,7 +65,7 @@ class ReinforceAgent(BaseAgent):
         obs: torch.Tensor,
         explore: bool = True,
         global_step: int = 0,
-    ) -> Tuple[torch.Tensor, Dict]:
+    ):
         obs = obs.to(self.device)
         logits = self.policy(obs)
         dist = Categorical(logits=logits)
@@ -81,25 +78,31 @@ class ReinforceAgent(BaseAgent):
         log_prob = dist.log_prob(action)
         return action, {"log_prob": log_prob.detach()}
 
-    def update(self, batch: Batch | Dict[str, torch.Tensor], global_step: int = 0) -> Dict[str, float]:
+    def update(self, batch, global_step: int = 0):
+        # REINFORCE 就一句话：
+        # loss = -E[ G_t * logπ(a_t|s_t) ]
+        # G_t 是折扣回报，从后往前算；我这里顺手把 returns 标准化一下，训练会稳一点
         observations = batch["observations"].to(self.device)
         actions = batch["actions"].to(self.device)
         rewards = batch["rewards"].to(self.device).view(-1, 1)
         dones = batch["dones"].to(self.device).view(-1, 1)
 
+        # 1) 先算当前策略对每一步动作的 log_prob
         logits = self.policy(observations)
         dist = Categorical(logits=logits)
         actions = actions.squeeze(-1).long() if actions.dim() > 1 else actions.long()
         log_probs = dist.log_prob(actions)
 
-        # 计算折扣回报并做简单标准化，帮助稳定训练
+        # 2) 从后往前算折扣回报 G_t（dones=1 时把 running_return 清零）
         returns = torch.zeros_like(rewards, device=self.device)
         running_return = torch.zeros(1, device=self.device)
         for t in reversed(range(rewards.size(0))):
             running_return = rewards[t] + self.config.gamma * running_return * (1.0 - dones[t])
             returns[t] = running_return
 
-        returns = (returns - returns.mean()) / (returns.std() + 1e-8)
+        # 3) 做个简单标准化：减少尺度问题，让训练更稳（作业里常用的小技巧）
+        returns = (returns - returns.mean()) / (returns.std(unbiased=False) + 1e-8)
+        # 4) 最大化 E[G_t * logπ] <=> 最小化 -(G_t * logπ)
         policy_loss = -(returns.squeeze(-1) * log_probs).mean()
 
         self.optimizer.zero_grad()
@@ -108,10 +111,10 @@ class ReinforceAgent(BaseAgent):
 
         return {"policy_loss": policy_loss.item()}
 
-    def save(self) -> Dict:
+    def save(self):
         return {"policy": self.policy.state_dict(), "optimizer": self.optimizer.state_dict()}
 
-    def load(self, data: Dict) -> None:
+    def load(self, data: Dict):
         self.policy.load_state_dict(data["policy"])
         if "optimizer" in data:
             self.optimizer.load_state_dict(data["optimizer"])

@@ -1,10 +1,16 @@
-# rlx/config/ppo.yaml 文件
-# PPO 智能体默认配置
 gamma: 0.99
-lr: 0.0003
-total_steps: 1000000
+# PPO 智能体默认配置
+total_steps: 200000
+
+# 同策略（按轨迹更新）：一次 update 收集多少条完整轨迹（episodes）
+batch_episodes: 8
+
+hidden_dim: 128
+actor_lr: 0.0003
+critic_lr: 0.001
+
 update_epochs: 4
-minibatch_size: 64
+minibatch_size: 256
 clip_coef: 0.2
 value_coef: 0.5
 entropy_coef: 0.01

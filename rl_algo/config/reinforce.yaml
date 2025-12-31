@@ -1,5 +1,4 @@
-# rlx/config/reinforce.yaml 文件
-# REINFORCE 智能体默认配置
 gamma: 0.99
+# REINFORCE 智能体默认配置
 lr: 0.0003
 total_steps: 100000

@@ -1,13 +1,15 @@
-# rlx/config/dqn.yaml 文件
-# 适用于 CartPole 等经典控制任务的 DQN 智能体默认配置。
 gamma: 0.99
+# 适用于 CartPole 等经典控制任务的 DQN 智能体默认配置。
 lr: 0.001
 buffer_size: 100000
 batch_size: 64
 train_frequency: 4
+gradient_steps: 1
+learning_starts: 1000
 target_update_frequency: 1000
+double_dqn: true
 epsilon_start: 1.0
 epsilon_end: 0.05
-epsilon_decay_steps: 50000
+epsilon_decay_fraction: 0.1
 total_steps: 200000
 max_grad_norm: 10.0

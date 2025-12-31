@@ -1,8 +1,7 @@
-# rlx/config/qlearning.yaml 文件
-# Q-Learning 智能体的默认配置
 lr: 0.1
+# Q-Learning 智能体的默认配置
 gamma: 0.99
 epsilon: 1.0
 total_steps: 50000
-num_bins: 10
+num_bins: 20
 clip_obs: 10.0

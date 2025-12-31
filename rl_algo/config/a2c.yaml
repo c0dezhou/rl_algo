@@ -1,7 +1,9 @@
-# rlx/config/a2c.yaml 文件
-# A2C 智能体默认配置
 gamma: 0.99
+# A2C 智能体默认配置
 lr: 0.0003
 value_coef: 0.5
 entropy_coef: 0.01
+update_epochs: 4
+minibatch_size: 256
+max_grad_norm: 0.5
 total_steps: 200000
